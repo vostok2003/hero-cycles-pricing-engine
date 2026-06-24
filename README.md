@@ -1,79 +1,227 @@
 # Hero Cycles Pricing Engine
 
-A production-quality MERN stack application for managing bicycle component pricing, configurations, and generating pricing breakdowns.
+A production-quality MERN stack application for managing bicycle component pricing,
+configurations, and generating real-time pricing breakdowns.
 
 ## Tech Stack
 
-- **Frontend**: React.js (Vite), Tailwind CSS, React Router, Axios
-- **Backend**: Node.js, Express.js, MongoDB Atlas, Mongoose
-- **Auth**: JWT Authentication, bcryptjs, Role-Based Access Control
+| Layer | Technology |
+|-------|-----------|
+| Frontend | React 18 (Vite), Tailwind CSS, React Router, Axios |
+| Backend | Node.js, Express.js |
+| Database | MongoDB Atlas, Mongoose |
+| Auth | JWT, bcryptjs, Role-Based Access Control |
+| Tests | Jest, Supertest |
 
-## Roles
+---
 
-| Role | Capabilities |
-|------|-------------|
-| **Admin** | Manage components, update prices, view price history |
-| **Salesperson** | Create/edit configurations, generate pricing breakdowns |
+## Roles & Permissions
 
-## Project Structure
+| Action | Admin | Salesperson |
+|--------|-------|-------------|
+| Manage components | ✅ | ❌ |
+| Update prices | ✅ | ❌ |
+| View price history | ✅ | ❌ |
+| Create configurations | ✅ | ✅ |
+| Edit **own** configurations | ✅ | ✅ |
+| Edit **others'** configurations | ✅ | ❌ (403) |
+| Delete **own** configurations | ✅ | ✅ |
+| Delete **others'** configurations | ✅ | ❌ (403) |
+| Generate pricing breakdown | ✅ | ✅ |
 
+---
+
+## Environment Setup
+
+### 1. Copy the example env file
+
+```bash
+cp .env.example backend/.env
 ```
-hero-cycles-pricing-engine/
-├── frontend/          # React + Vite frontend
-├── backend/           # Node.js + Express API
-└── README.md
+
+Edit `backend/.env` and fill in:
+
+```env
+PORT=5000
+NODE_ENV=development
+MONGO_URI=mongodb+srv://<user>:<password>@cluster0.mongodb.net/hero-cycles-pricing
+JWT_SECRET=your_long_random_secret_here
+FRONTEND_URL=http://localhost:5173
+
+# Optional — separate DB for tests
+MONGO_URI_TEST=mongodb+srv://<user>:<password>@cluster0.mongodb.net/hero-cycles-test
 ```
 
-## Setup & Running
+> **Never commit your actual `.env` file.** It is in `.gitignore`.
 
-### 1. Configure MongoDB Atlas
+---
 
-Edit `backend/.env` and update `MONGO_URI` with your Atlas connection string:
-```
-MONGO_URI=mongodb+srv://<username>:<password>@cluster0.mongodb.net/hero-cycles-pricing?retryWrites=true&w=majority
-JWT_SECRET=your_secret_key_here
-```
+## Running the Project
 
-### 2. Backend
+### Backend
 
 ```bash
 cd backend
 npm install
-npm run dev
+npm run dev        # Development (nodemon)
+npm start          # Production
 ```
-Server runs on `http://localhost:5000`
 
-### 3. Frontend
+Server starts on `http://localhost:5000`
+
+### Frontend
 
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
+
 App runs on `http://localhost:5173`
+
+### Frontend environment
+
+Create `frontend/.env`:
+
+```env
+VITE_API_URL=http://localhost:5000/api
+```
+
+For a deployed backend, replace the URL with your production API base URL.
+
+---
+
+## Seed Data
+
+Populate the database with sample users, components, and configurations:
+
+```bash
+cd backend
+npm run seed
+```
+
+**Seeded credentials:**
+
+| Role | Email | Password |
+|------|-------|----------|
+| Admin | admin@herocycles.com | admin123 |
+| Salesperson | sales@herocycles.com | sales123 |
+
+Seeded data includes 13 components (across all 5 categories) and 2 sample
+configurations: **Mountain Bike** and **Road Bike**.
+
+---
+
+## Running Tests
+
+```bash
+cd backend
+npm test           # Run all tests once
+npm run test:watch # Watch mode
+```
+
+Tests cover:
+- **Auth** — register, login, token validation
+- **Configuration** — CRUD, ownership checks (403), mandatory category validation (400)
+- **Pricing** — breakdown calculation, quantity × price, 404 for unknown IDs
+
+> Tests use a separate test database (`MONGO_URI_TEST`). If not set, they fall back
+> to `MONGO_URI` and clean up after themselves.
+
+---
 
 ## API Endpoints
 
-| Method | Endpoint | Access | Description |
-|--------|----------|--------|-------------|
-| POST | `/api/auth/register` | Public | Register user |
-| POST | `/api/auth/login` | Public | Login |
-| GET | `/api/components` | Private | Get components (paginated) |
-| POST | `/api/components` | Admin | Create component |
-| PUT | `/api/components/:id` | Admin | Update component |
-| DELETE | `/api/components/:id` | Admin | Delete component |
-| POST | `/api/prices/update` | Admin | Update component price |
-| GET | `/api/prices/history` | Admin | Get all price history |
-| POST | `/api/configurations` | Salesperson | Create configuration |
-| PUT | `/api/configurations/:id` | Salesperson | Update configuration |
-| GET | `/api/configurations/:id` | Private | Get configuration |
-| GET | `/api/pricing/:configurationId` | Private | Get pricing breakdown |
-| GET | `/api/dashboard/summary` | Private | Dashboard stats |
+### Auth
+| Method | Endpoint | Access |
+|--------|----------|--------|
+| POST | `/api/auth/register` | Public |
+| POST | `/api/auth/login` | Public |
+| GET | `/api/auth/me` | Private |
 
-## Key Features
+### Components
+| Method | Endpoint | Access |
+|--------|----------|--------|
+| GET | `/api/components` | Private |
+| GET | `/api/components/all` | Private |
+| POST | `/api/components` | Admin |
+| PUT | `/api/components/:id` | Admin |
+| DELETE | `/api/components/:id` | Admin |
 
-- **Pricing Engine**: Automatically calculates configuration total price using latest component prices
-- **Mandatory Components**: Frame, Tyre, and Gear Set are required for every configuration
-- **Price History**: All price changes are tracked with old/new price, who made the change, and when
-- **Role Protection**: Admin and Salesperson routes are fully separated with JWT + RBAC
-- **Responsive UI**: Clean enterprise-style dark theme with Tailwind CSS
+### Prices
+| Method | Endpoint | Access |
+|--------|----------|--------|
+| POST | `/api/prices/update` | Admin |
+| GET | `/api/prices/history` | Admin |
+| GET | `/api/prices/history/:componentId` | Admin |
+
+### Configurations
+| Method | Endpoint | Access |
+|--------|----------|--------|
+| GET | `/api/configurations` | Private |
+| POST | `/api/configurations` | Admin / Salesperson |
+| GET | `/api/configurations/:id` | Private |
+| PUT | `/api/configurations/:id` | Owner or Admin |
+| DELETE | `/api/configurations/:id` | Owner or Admin |
+| POST | `/api/configurations/:id/components` | Owner or Admin |
+
+### Pricing Breakdown
+| Method | Endpoint | Access |
+|--------|----------|--------|
+| GET | `/api/pricing/:configurationId` | Private |
+
+### Dashboard
+| Method | Endpoint | Access |
+|--------|----------|--------|
+| GET | `/api/dashboard/summary` | Private |
+| GET | `/api/dashboard/recent-price-updates` | Private |
+
+---
+
+## Business Rules
+
+- **Mandatory categories**: Every configuration must always include at least one
+  component from **Frame**, **Tyre**, and **Gear Set**.
+- **Ownership**: Salespersons may only update or delete configurations they created.
+  Admins can mutate any configuration.
+- **Price history**: Every price change is logged with old price, new price, who made
+  the change, and the effective date.
+
+---
+
+## Project Structure
+
+```
+hero-cycles-pricing-engine/
+├── backend/
+│   ├── src/
+│   │   ├── config/          # DB connection
+│   │   ├── controllers/     # Route handlers
+│   │   ├── middleware/      # Auth, role, error middleware
+│   │   ├── models/          # Mongoose schemas
+│   │   ├── routes/          # Express routers
+│   │   ├── seed/            # seedData.js
+│   │   ├── services/        # pricingEngine, dashboardService
+│   │   ├── tests/           # Jest + Supertest test suites
+│   │   │   └── helpers/     # testDb.js, testData.js
+│   │   └── utils/           # generateToken, validators, configValidation
+│   ├── .env                 # Local env (git-ignored)
+│   └── package.json
+├── frontend/
+│   ├── src/
+│   │   ├── components/
+│   │   ├── context/
+│   │   ├── pages/
+│   │   ├── routes/
+│   │   ├── services/
+│   │   └── utils/
+│   ├── .env                 # Local env (git-ignored)
+│   └── package.json
+├── .env.example             # Template — copy to backend/.env
+├── .gitignore
+└── README.md
+```
+
+---
+
+Hero Cycles Pricing Engine © 2026

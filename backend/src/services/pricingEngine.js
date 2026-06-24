@@ -17,7 +17,10 @@ const calculateConfigurationPrice = async (configurationId) => {
   // Fetch the configuration
   const configuration = await Configuration.findById(configurationId).populate('createdBy', 'name email');
   if (!configuration) {
-    throw new Error('Configuration not found');
+    // Use a named error so the controller can respond with 404
+    const err = new Error('Configuration not found');
+    err.statusCode = 404;
+    throw err;
   }
 
   // Fetch all components for this configuration

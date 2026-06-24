@@ -1,15 +1,19 @@
 const { validationResult } = require('express-validator');
 const Configuration = require('../models/Configuration');
 const ConfigurationComponent = require('../models/ConfigurationComponent');
-const Component = require('../models/Component');
+const {
+  validateMandatoryCategories,
+  canMutateConfiguration,
+} = require('../utils/configValidation');
 
-// Mandatory categories for a valid bicycle configuration
-const MANDATORY_CATEGORIES = ['Frame', 'Tyre', 'Gear Set'];
+// ─────────────────────────────────────────────
+// CREATE
+// ─────────────────────────────────────────────
 
 /**
- * @desc    Create a new configuration
+ * @desc    Create a new bicycle configuration
  * @route   POST /api/configurations
- * @access  Private (Salesperson)
+ * @access  Private (Admin | Salesperson)
  */
 const createConfiguration = async (req, res, next) => {
   try {
@@ -20,46 +24,34 @@ const createConfiguration = async (req, res, next) => {
 
     const { configurationName, description, components } = req.body;
 
-    // Validate mandatory categories are present
-    if (components && components.length > 0) {
-      const componentDocs = await Component.find({
-        _id: { $in: components.map((c) => c.componentId) },
+    // Mandatory category check — required even at creation time
+    const componentIds = (components || []).map((c) => c.componentId);
+    const { valid, missing } = await validateMandatoryCategories(componentIds);
+    if (!valid) {
+      return res.status(400).json({
+        success: false,
+        message: `Missing mandatory categories: ${missing.join(', ')}`,
       });
-
-      const presentCategories = componentDocs.map((c) => c.category);
-      const missingMandatory = MANDATORY_CATEGORIES.filter(
-        (cat) => !presentCategories.includes(cat)
-      );
-
-      if (missingMandatory.length > 0) {
-        return res.status(400).json({
-          success: false,
-          message: `Missing mandatory categories: ${missingMandatory.join(', ')}`,
-        });
-      }
     }
 
-    // Create configuration
+    // Create the configuration record
     const configuration = await Configuration.create({
       configurationName,
       description,
       createdBy: req.user._id,
     });
 
-    // Add components if provided
-    if (components && components.length > 0) {
-      const configComponents = components.map((c) => ({
-        configurationId: configuration._id,
-        componentId: c.componentId,
-        quantity: c.quantity || 1,
-      }));
-      await ConfigurationComponent.insertMany(configComponents);
-    }
+    // Persist component links
+    const configComponents = components.map((c) => ({
+      configurationId: configuration._id,
+      componentId: c.componentId,
+      quantity: c.quantity || 1,
+    }));
+    await ConfigurationComponent.insertMany(configComponents);
 
-    // Return with populated data
     const populatedConfig = await getConfigurationWithComponents(configuration._id);
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       message: 'Configuration created successfully',
       data: populatedConfig,
@@ -69,10 +61,14 @@ const createConfiguration = async (req, res, next) => {
   }
 };
 
+// ─────────────────────────────────────────────
+// UPDATE
+// ─────────────────────────────────────────────
+
 /**
- * @desc    Update a configuration
+ * @desc    Update a configuration (name, description, components)
  * @route   PUT /api/configurations/:id
- * @access  Private (Salesperson)
+ * @access  Private (Admin | Salesperson — owner only)
  */
 const updateConfiguration = async (req, res, next) => {
   try {
@@ -86,33 +82,34 @@ const updateConfiguration = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Configuration not found' });
     }
 
+    // ── Ownership check ──────────────────────────────────────────────────
+    if (!canMutateConfiguration(configuration, req.user)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Forbidden: you can only edit your own configurations',
+      });
+    }
+
     const { configurationName, description, components } = req.body;
 
-    // Validate mandatory categories if updating components
-    if (components && components.length > 0) {
-      const componentDocs = await Component.find({
-        _id: { $in: components.map((c) => c.componentId) },
-      });
-
-      const presentCategories = componentDocs.map((c) => c.category);
-      const missingMandatory = MANDATORY_CATEGORIES.filter(
-        (cat) => !presentCategories.includes(cat)
-      );
-
-      if (missingMandatory.length > 0) {
+    // Validate mandatory categories whenever components are supplied
+    if (components !== undefined) {
+      const componentIds = (components || []).map((c) => c.componentId);
+      const { valid, missing } = await validateMandatoryCategories(componentIds);
+      if (!valid) {
         return res.status(400).json({
           success: false,
-          message: `Missing mandatory categories: ${missingMandatory.join(', ')}`,
+          message: `Missing mandatory categories: ${missing.join(', ')}`,
         });
       }
     }
 
-    // Update configuration details
-    configuration.configurationName = configurationName || configuration.configurationName;
-    configuration.description = description !== undefined ? description : configuration.description;
+    // Apply field updates
+    if (configurationName) configuration.configurationName = configurationName;
+    if (description !== undefined) configuration.description = description;
     await configuration.save();
 
-    // Replace components if provided
+    // Replace component list if a new one was provided
     if (components !== undefined) {
       await ConfigurationComponent.deleteMany({ configurationId: configuration._id });
 
@@ -128,7 +125,7 @@ const updateConfiguration = async (req, res, next) => {
 
     const populatedConfig = await getConfigurationWithComponents(configuration._id);
 
-    res.json({
+    return res.json({
       success: true,
       message: 'Configuration updated successfully',
       data: populatedConfig,
@@ -138,8 +135,12 @@ const updateConfiguration = async (req, res, next) => {
   }
 };
 
+// ─────────────────────────────────────────────
+// READ (single)
+// ─────────────────────────────────────────────
+
 /**
- * @desc    Get a configuration by ID
+ * @desc    Get a single configuration by ID
  * @route   GET /api/configurations/:id
  * @access  Private
  */
@@ -149,14 +150,18 @@ const getConfiguration = async (req, res, next) => {
     if (!populatedConfig) {
       return res.status(404).json({ success: false, message: 'Configuration not found' });
     }
-    res.json({ success: true, data: populatedConfig });
+    return res.json({ success: true, data: populatedConfig });
   } catch (error) {
     next(error);
   }
 };
 
+// ─────────────────────────────────────────────
+// READ (all)
+// ─────────────────────────────────────────────
+
 /**
- * @desc    Get all configurations (for salesperson dashboard)
+ * @desc    Get all configurations with optional search and pagination
  * @route   GET /api/configurations
  * @access  Private
  */
@@ -179,7 +184,7 @@ const getAllConfigurations = async (req, res, next) => {
       Configuration.countDocuments(query),
     ]);
 
-    res.json({
+    return res.json({
       success: true,
       data: configurations,
       pagination: {
@@ -194,10 +199,14 @@ const getAllConfigurations = async (req, res, next) => {
   }
 };
 
+// ─────────────────────────────────────────────
+// DELETE
+// ─────────────────────────────────────────────
+
 /**
- * @desc    Delete a configuration
+ * @desc    Delete a configuration and its component links
  * @route   DELETE /api/configurations/:id
- * @access  Private (Salesperson)
+ * @access  Private (Admin | Salesperson — owner only)
  */
 const deleteConfiguration = async (req, res, next) => {
   try {
@@ -206,20 +215,31 @@ const deleteConfiguration = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Configuration not found' });
     }
 
-    // Remove associated components
+    // ── Ownership check ──────────────────────────────────────────────────
+    if (!canMutateConfiguration(configuration, req.user)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Forbidden: you can only delete your own configurations',
+      });
+    }
+
     await ConfigurationComponent.deleteMany({ configurationId: configuration._id });
     await configuration.deleteOne();
 
-    res.json({ success: true, message: 'Configuration deleted successfully' });
+    return res.json({ success: true, message: 'Configuration deleted successfully' });
   } catch (error) {
     next(error);
   }
 };
 
+// ─────────────────────────────────────────────
+// UPDATE COMPONENTS (standalone route)
+// ─────────────────────────────────────────────
+
 /**
- * @desc    Add/replace components in a configuration
+ * @desc    Replace all components in a configuration
  * @route   POST /api/configurations/:id/components
- * @access  Private (Salesperson)
+ * @access  Private (Admin | Salesperson — owner only)
  */
 const updateConfigurationComponents = async (req, res, next) => {
   try {
@@ -230,21 +250,37 @@ const updateConfigurationComponents = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Configuration not found' });
     }
 
-    // Delete existing and re-insert
+    // ── Ownership check ──────────────────────────────────────────────────
+    if (!canMutateConfiguration(configuration, req.user)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Forbidden: you can only modify your own configurations',
+      });
+    }
+
+    // ── Mandatory category check ─────────────────────────────────────────
+    const componentIds = (components || []).map((c) => c.componentId);
+    const { valid, missing } = await validateMandatoryCategories(componentIds);
+    if (!valid) {
+      return res.status(400).json({
+        success: false,
+        message: `Missing mandatory categories: ${missing.join(', ')}`,
+      });
+    }
+
+    // Replace components
     await ConfigurationComponent.deleteMany({ configurationId: configuration._id });
 
-    if (components && components.length > 0) {
-      const configComponents = components.map((c) => ({
-        configurationId: configuration._id,
-        componentId: c.componentId,
-        quantity: c.quantity || 1,
-      }));
-      await ConfigurationComponent.insertMany(configComponents);
-    }
+    const configComponents = components.map((c) => ({
+      configurationId: configuration._id,
+      componentId: c.componentId,
+      quantity: c.quantity || 1,
+    }));
+    await ConfigurationComponent.insertMany(configComponents);
 
     const populatedConfig = await getConfigurationWithComponents(configuration._id);
 
-    res.json({
+    return res.json({
       success: true,
       message: 'Configuration components updated',
       data: populatedConfig,
@@ -254,16 +290,22 @@ const updateConfigurationComponents = async (req, res, next) => {
   }
 };
 
+// ─────────────────────────────────────────────
+// HELPER
+// ─────────────────────────────────────────────
+
 /**
- * Helper: Get configuration with populated component details
+ * Fetch a configuration document with its components populated.
+ * @param {string} configId
+ * @returns {Object|null}
  */
 const getConfigurationWithComponents = async (configId) => {
   const configuration = await Configuration.findById(configId).populate('createdBy', 'name email');
   if (!configuration) return null;
 
-  const configComponents = await ConfigurationComponent.find({ configurationId: configId }).populate(
-    'componentId'
-  );
+  const configComponents = await ConfigurationComponent.find({
+    configurationId: configId,
+  }).populate('componentId');
 
   return {
     ...configuration.toObject(),

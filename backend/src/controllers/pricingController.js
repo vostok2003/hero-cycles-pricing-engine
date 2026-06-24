@@ -144,8 +144,12 @@ const getPricingBreakdown = async (req, res, next) => {
   try {
     const { configurationId } = req.params;
     const result = await pricingEngine.calculateConfigurationPrice(configurationId);
-    res.json({ success: true, data: result });
+    return res.json({ success: true, data: result });
   } catch (error) {
+    // Propagate custom statusCode set by pricingEngine (e.g. 404)
+    if (error.statusCode) {
+      return res.status(error.statusCode).json({ success: false, message: error.message });
+    }
     next(error);
   }
 };
